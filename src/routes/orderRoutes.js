@@ -2,6 +2,7 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../database');
 const authMiddleware = require('../middleware/authMiddleware');
+const { queryTradeInfo } = require('../services/ecpayService');
 
 const router = express.Router();
 
@@ -413,6 +414,38 @@ router.patch('/:id/pay', (req, res) => {
     error: null,
     message: action === 'success' ? '付款成功' : '付款失敗'
   });
+});
+
+// POST /api/orders/:id/verify-payment
+// Manually queries ECPay to confirm payment status (fallback for when OrderResultURL wasn't reached).
+router.post('/:id/verify-payment', async (req, res) => {
+  const order = db.prepare('SELECT * FROM orders WHERE id = ? AND user_id = ?')
+    .get(req.params.id, req.user.userId);
+  if (!order) {
+    return res.status(404).json({ data: null, error: 'NOT_FOUND', message: '訂單不存在' });
+  }
+  if (order.status !== 'pending') {
+    const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(order.id);
+    return res.json({ data: { ...order, items }, error: null, message: '訂單已有付款結果' });
+  }
+
+  const merchantTradeNo = order.order_no.replace(/-/g, '');
+  try {
+    const tradeInfo = await queryTradeInfo(merchantTradeNo);
+    const isPaid = tradeInfo.TradeStatus === '1';
+    if (isPaid) {
+      db.prepare("UPDATE orders SET status = 'paid' WHERE id = ?").run(order.id);
+    }
+    const updated = db.prepare('SELECT * FROM orders WHERE id = ?').get(order.id);
+    const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(order.id);
+    return res.json({
+      data: { ...updated, items },
+      error: null,
+      message: isPaid ? '付款已確認' : '尚未付款'
+    });
+  } catch (err) {
+    return res.status(502).json({ data: null, error: 'ECPAY_ERROR', message: '查詢綠界失敗，請稍後再試' });
+  }
 });
 
 module.exports = router;
