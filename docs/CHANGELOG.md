@@ -1,5 +1,24 @@
 # CHANGELOG.md
 
+## [1.1.0] - 2026-05-19
+
+### Added
+
+- **綠界 ECPay 金流串接（AIO）**：新增 `src/services/ecpayService.js`，實作 CheckMacValue（SHA256）計算與 timing-safe 驗證、AIO 表單參數組裝（含台灣時區 MerchantTradeDate）、`QueryTradeInfo/V5` 主動查詢。
+- **`POST /api/ecpay/checkout`**（JWT 必要）：驗證訂單並回傳 AIO 表單欄位（含 CheckMacValue），前端動態建立 form 提交至綠界付款頁。
+- **`POST /api/ecpay/return`**（OrderResultURL，無 auth）：接收使用者瀏覽器回傳的付款結果；驗 CheckMacValue → 呼叫 QueryTradeInfo 二次確認 → 更新訂單 status → redirect 至訂單詳情頁。適用於本機無法接收 S2S ReturnURL 的情境。
+- **`POST /api/ecpay/notify`**（ReturnURL，無 auth）：回傳純文字 `1|OK`，防止綠界重試。
+- **`POST /api/orders/:id/verify-payment`**（JWT 必要）：備援端點，當 OrderResultURL 未觸達時可手動向綠界 QueryTradeInfo 查詢並同步訂單狀態。
+- 訂單詳情頁（`order-detail.ejs` / `order-detail.js`）新增「前往綠界付款」與「查詢付款狀態」按鈕，取代原模擬付款按鈕。
+
+### Changed
+
+- `src/routes/orderRoutes.js` 新增 `verify-payment` 路由（引入 `ecpayService`）。
+- `app.js` 新增 `/api/ecpay` 路由掛載。
+- `PATCH /api/orders/:id/pay`（模擬付款）保留，僅於前端移除入口，測試環境繼續可用。
+
+---
+
 ## [1.0.0] - 2026-05-19
 
 ### 初始版本

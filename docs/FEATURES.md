@@ -8,7 +8,8 @@
 | 商品列表與詳情（公開 API） | ✅ 完成 |
 | 購物車（Guest + 登入雙模式） | ✅ 完成 |
 | 訂單建立與查詢 | ✅ 完成 |
-| 模擬付款 | ✅ 完成 |
+| 模擬付款（保留供測試） | ✅ 完成 |
+| 綠界 ECPay 金流串接（AIO + QueryTradeInfo） | ✅ 完成 |
 | 後台商品管理（CRUD） | ✅ 完成 |
 | 後台訂單管理（列表 + 詳情） | ✅ 完成 |
 | 前台頁面（SSR + EJS） | ✅ 完成 |
@@ -216,7 +217,7 @@
 
 ---
 
-### 4.4 PATCH /api/orders/:id/pay — 模擬付款
+### 4.4 PATCH /api/orders/:id/pay — 模擬付款（保留供測試）
 
 **業務邏輯：**
 - Request body 必須包含 `action: "success" | "fail"`
@@ -225,6 +226,8 @@
 - `action: "fail"` → status 更新為 `'failed'`
 - 狀態為單向不可逆（paid/failed 不能再改）
 - 回傳更新後的完整訂單（含 items）
+
+> **注意：** 此端點為測試用模擬接口，正式付款請使用 `/api/ecpay/checkout`（綠界金流）。
 
 **錯誤碼：**
 
@@ -236,7 +239,149 @@
 
 ---
 
-## 5. 後台商品管理
+### 4.5 POST /api/orders/:id/verify-payment — 主動查詢付款狀態
+
+**用途：** 當使用者完成綠界付款後，若 OrderResultURL 因網路問題未觸達本機，可透過此端點手動向綠界查詢並同步訂單狀態。前端「查詢付款狀態」按鈕呼叫此端點。
+
+**業務邏輯：**
+1. 驗證訂單屬於當前使用者
+2. 若訂單已非 `pending`，直接回傳現有狀態（冪等）
+3. 以 `order_no.replace(/-/g, '')` 作為 `MerchantTradeNo` 向綠界 `QueryTradeInfo/V5` 發出 POST 查詢
+4. 驗證綠界回應的 `CheckMacValue`
+5. `TradeStatus === '1'` → 更新訂單為 `paid`
+6. 其他狀態（`TradeStatus === '0'`：未付款）→ 不更新，回傳目前狀態
+
+**錯誤碼：**
+
+| 狀態 | error | 情境 |
+|------|-------|------|
+| 401 | `UNAUTHORIZED` | 未登入 |
+| 404 | `NOT_FOUND` | 訂單不存在（或不屬於當前使用者） |
+| 502 | `ECPAY_ERROR` | 呼叫綠界 API 失敗（逾時、CheckMacValue 不符等） |
+
+---
+
+## 5. 綠界金流串接（ECPay AIO）
+
+本功能串接綠界全方位金流（AIO），付款結果透過 **OrderResultURL**（使用者瀏覽器回傳）接收，並以主動呼叫 **QueryTradeInfo** 驗證，適用於僅運行於本機、無法接收 S2S 回呼（ReturnURL）的開發環境。
+
+### 核心元件
+
+| 元件 | 路徑 | 說明 |
+|------|------|------|
+| ECPay service | `src/services/ecpayService.js` | CheckMacValue 計算/驗證、AIO 參數組裝、QueryTradeInfo 查詢 |
+| ECPay routes | `src/routes/ecpayRoutes.js` | `/checkout`、`/return`、`/notify` 三個路由 |
+
+### 付款流程
+
+```
+[訂單詳情頁] 點「前往綠界付款」
+  → POST /api/ecpay/checkout（JWT auth）
+  → 後端回傳 { url, params }（AIO 表單欄位 + CheckMacValue）
+  → 前端動態建立 form 並 submit 至 ECPay 付款頁
+
+使用者在 ECPay 頁面完成付款
+  → ECPay 將瀏覽器導回 POST /api/ecpay/return（OrderResultURL）
+  → 後端驗 CheckMacValue → 呼叫 QueryTradeInfo 二次確認
+  → 更新訂單 status → redirect /orders/:id?payment=success|failed
+
+若 OrderResultURL 未觸達
+  → 使用者點「查詢付款狀態」→ POST /api/orders/:id/verify-payment
+```
+
+### MerchantTradeNo 策略
+
+綠界要求 MerchantTradeNo 最長 20 字元且僅限英數字。本專案以 `order_no.replace(/-/g, '')` 產生：
+- `ORD-20260519-AB12C` → `ORD20260519AB12C`（16 字元）
+- 資料庫反查：`SELECT * FROM orders WHERE REPLACE(order_no, '-', '') = ?`
+
+不需要額外欄位，不更動 Schema。
+
+### 5.1 POST /api/ecpay/checkout — 產生 AIO 付款參數
+
+**認證：** JWT（使用者必須登入）
+
+**Request Body：**
+```json
+{ "orderId": "string（必填）" }
+```
+
+**業務邏輯：**
+1. 驗證訂單屬於當前使用者且 `status === 'pending'`
+2. 讀取 order_items 產生 `ItemName`（格式：`商品名 xN#商品名 xN`，超過 400 bytes 安全截斷）
+3. 組裝 AIO 必要欄位（見下方），計算 CheckMacValue（SHA256）
+4. 回傳 `{ url, params }` 供前端提交
+
+**AIO 關鍵欄位：**
+
+| 欄位 | 值 |
+|------|----|
+| `PaymentType` | `aio` |
+| `ChoosePayment` | `ALL`（所有支援方式） |
+| `EncryptType` | `1`（SHA256） |
+| `ReturnURL` | `{BASE_URL}/api/ecpay/notify` |
+| `OrderResultURL` | `{BASE_URL}/api/ecpay/return` |
+| `ClientBackURL` | `{BASE_URL}/orders/:id?payment=cancel` |
+| `MerchantTradeDate` | 台灣時間（UTC+8） |
+
+**Response：**
+```json
+{
+  "data": {
+    "url": "https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5",
+    "params": { "MerchantID": "...", "CheckMacValue": "...", ... }
+  }
+}
+```
+
+**錯誤碼：**
+
+| 狀態 | error | 情境 |
+|------|-------|------|
+| 400 | `VALIDATION_ERROR` | orderId 缺失 |
+| 400 | `INVALID_STATUS` | 訂單非 pending 狀態 |
+| 404 | `NOT_FOUND` | 訂單不存在 |
+
+---
+
+### 5.2 POST /api/ecpay/return — OrderResultURL（付款結果接收）
+
+**認證：** 無（由綠界透過使用者瀏覽器 POST 過來）
+
+**業務邏輯：**
+1. 驗證 `CheckMacValue`（SHA256，timing-safe 比對）；失敗 → redirect `/orders?payment=failed`
+2. 以 `MerchantTradeNo` 反查訂單
+3. 若訂單已非 `pending`，直接 redirect 至對應結果頁（冪等）
+4. 呼叫 `QueryTradeInfo/V5` 驗證付款狀態（`TradeStatus === '1'` 為已付款）
+5. 更新訂單 status → redirect `/orders/:id?payment=success|failed`
+6. 若 QueryTradeInfo 呼叫失敗，退回以 `RtnCode` 欄位判斷（降級處理）
+
+> **本機開發說明：** S2S ReturnURL（`/api/ecpay/notify`）在本機無法被綠界伺服器呼叫，因此付款確認依賴此 OrderResultURL（由使用者瀏覽器執行，可達本機）。
+
+---
+
+### 5.3 POST /api/ecpay/notify — ReturnURL（S2S，永遠回 1|OK）
+
+**認證：** 無
+
+回傳純文字 `1|OK`（HTTP 200），防止綠界伺服器重試。本機環境下綠界無法呼叫此端點，但正式部署後此端點即為主要確認管道。
+
+---
+
+### 5.4 環境變數
+
+| 變數 | 說明 |
+|------|------|
+| `ECPAY_MERCHANT_ID` | 綠界特店編號 |
+| `ECPAY_HASH_KEY` | 金流 HashKey |
+| `ECPAY_HASH_IV` | 金流 HashIV |
+| `ECPAY_ENV` | `staging`（測試）或 `production`（正式） |
+
+測試環境公開帳號：MerchantID `3002607`，HashKey `pwFHCqoQZGmho4w6`，HashIV `EkRm7iFT261dpevs`。
+
+---
+
+## 6. 後台商品管理
 
 所有後台路由需要 JWT + admin role（`authMiddleware` → `adminMiddleware`）。
 
@@ -271,15 +416,15 @@
 
 ---
 
-## 6. 後台訂單管理
+## 7. 後台訂單管理
 
-### 6.1 GET /api/admin/orders — 訂單列表
+### 7.1 GET /api/admin/orders — 訂單列表
 
 - 支援分頁（`page`, `limit`）
 - 支援狀態篩選：`?status=pending|paid|failed`（無效 status 值直接忽略，回傳全部）
 - 回傳所有用戶的訂單
 
-### 6.2 GET /api/admin/orders/:id — 訂單詳情
+### 7.2 GET /api/admin/orders/:id — 訂單詳情
 
 - 可存取任意用戶的訂單（無 user_id 過濾）
 - 額外附上 `user: { name, email }`（若使用者被刪則為 null）
@@ -287,7 +432,7 @@
 
 ---
 
-## 7. 前台頁面（SSR）
+## 8. 前台頁面（SSR）
 
 所有頁面使用兩步 render 模式：
 1. 先 render page partial → body 字串

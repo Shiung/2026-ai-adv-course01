@@ -30,11 +30,14 @@ Client Browser
 │   │   ├── adminMiddleware.js   # 角色檢查：req.user.role 必須為 'admin'
 │   │   ├── sessionMiddleware.js # 讀取 X-Session-Id header，寫入 req.sessionId
 │   │   └── errorHandler.js     # Express 錯誤處理（5xx 不洩漏內部訊息）
+│   ├── services/
+│   │   └── ecpayService.js      # 綠界金流：CheckMacValue（SHA256）、AIO 參數組裝、QueryTradeInfo
 │   └── routes/
 │       ├── authRoutes.js        # POST /register, POST /login, GET /profile
 │       ├── productRoutes.js     # GET /api/products, GET /api/products/:id（公開）
 │       ├── cartRoutes.js        # GET|POST|PATCH|DELETE /api/cart（雙模式認證）
 │       ├── orderRoutes.js       # POST|GET /api/orders, GET|PATCH /api/orders/:id（JWT）
+│       ├── ecpayRoutes.js       # POST /api/ecpay/checkout|return|notify（綠界金流）
 │       ├── adminProductRoutes.js # GET|POST /api/admin/products, PUT|DELETE /:id（admin）
 │       ├── adminOrderRoutes.js   # GET /api/admin/orders, GET /:id（admin）
 │       └── pageRoutes.js        # 所有頁面路由（/, /products/:id, /cart, /admin/...）
@@ -92,7 +95,7 @@ node server.js
         ├── dotenv.config()
         ├── require('./src/database')   ← 建立 SQLite 表、seed 資料
         ├── 掛載 middleware（cors, json, urlencoded, sessionMiddleware）
-        ├── 掛載 API 路由（/api/auth, /api/products, /api/cart, /api/orders, /api/admin/...）
+        ├── 掛載 API 路由（/api/auth, /api/products, /api/cart, /api/orders, /api/ecpay, /api/admin/...）
         ├── 掛載 Page 路由（/）
         ├── 404 handler（API → JSON；頁面 → 404.ejs）
         └── errorHandler（Express 錯誤 middleware，4 個參數）
@@ -114,7 +117,11 @@ node server.js
 | `/api/orders` | POST | `/` | JWT | 從購物車建立訂單 |
 | `/api/orders` | GET | `/` | JWT | 我的訂單列表 |
 | `/api/orders` | GET | `/:id` | JWT | 訂單詳情 |
-| `/api/orders` | PATCH | `/:id/pay` | JWT | 模擬付款 |
+| `/api/orders` | PATCH | `/:id/pay` | JWT | 模擬付款（測試用） |
+| `/api/orders` | POST | `/:id/verify-payment` | JWT | 主動查詢綠界付款狀態 |
+| `/api/ecpay` | POST | `/checkout` | JWT | 產生 AIO 付款表單參數 |
+| `/api/ecpay` | POST | `/return` | 無 | OrderResultURL：接收付款結果、更新訂單 |
+| `/api/ecpay` | POST | `/notify` | 無 | ReturnURL（S2S）：回 1\|OK |
 | `/api/admin/products` | GET | `/` | JWT + admin | 後台商品列表（分頁） |
 | `/api/admin/products` | POST | `/` | JWT + admin | 新增商品 |
 | `/api/admin/products` | PUT | `/:id` | JWT + admin | 更新商品 |
