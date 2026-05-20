@@ -71,6 +71,17 @@ function initializeDatabase() {
   // Seed data
   seedAdminUser();
   seedProducts();
+
+  function addColumnIfNotExists(table, column, definition) {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+    if (!cols.find(c => c.name === column)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  }
+
+  addColumnIfNotExists('orders', 'ecpay_trade_no', 'TEXT');
+  addColumnIfNotExists('orders', 'payment_method', 'TEXT');
+  addColumnIfNotExists('orders', 'paid_at', 'TEXT');
 }
 
 function seedAdminUser() {

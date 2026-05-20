@@ -2,6 +2,7 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../database');
 const authMiddleware = require('../middleware/authMiddleware');
+const { buildAIOParams, queryTradeInfo } = require('../utils/ecpay');
 
 const router = express.Router();
 
@@ -413,6 +414,135 @@ router.patch('/:id/pay', (req, res) => {
     error: null,
     message: action === 'success' ? '付款成功' : '付款失敗'
   });
+});
+
+/**
+ * @openapi
+ * /api/orders/{id}/ecpay-form:
+ *   get:
+ *     summary: 取得 ECPay AIO 表單參數
+ *     tags: [Orders]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: 成功
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     params:
+ *                       type: object
+ *                     actionUrl:
+ *                       type: string
+ *                 error:
+ *                   type: string
+ *                   nullable: true
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: 訂單狀態不是 pending
+ *       404:
+ *         description: 訂單不存在
+ */
+router.get('/:id/ecpay-form', (req, res) => {
+  const userId = req.user.userId;
+  const order = db.prepare('SELECT * FROM orders WHERE id = ? AND user_id = ?').get(req.params.id, userId);
+
+  if (!order) {
+    return res.status(404).json({ data: null, error: 'NOT_FOUND', message: '訂單不存在' });
+  }
+
+  if (order.status !== 'pending') {
+    return res.status(400).json({ data: null, error: 'INVALID_STATUS', message: '訂單已付款，無需重複付款' });
+  }
+
+  const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(order.id);
+  const baseUrl = process.env.BASE_URL || 'http://localhost:3001';
+  const { params, actionUrl } = buildAIOParams(order, items, baseUrl);
+
+  res.json({ data: { params, actionUrl }, error: null, message: '成功' });
+});
+
+/**
+ * @openapi
+ * /api/orders/{id}/verify-payment:
+ *   post:
+ *     summary: 向 ECPay 查詢付款結果並更新訂單
+ *     tags: [Orders]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: 成功
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     status:
+ *                       type: string
+ *                 error:
+ *                   type: string
+ *                   nullable: true
+ *                 message:
+ *                   type: string
+ *       404:
+ *         description: 訂單不存在
+ *       500:
+ *         description: ECPay 查詢失敗
+ */
+router.post('/:id/verify-payment', async (req, res) => {
+  const userId = req.user.userId;
+  const order = db.prepare('SELECT * FROM orders WHERE id = ? AND user_id = ?').get(req.params.id, userId);
+
+  if (!order) {
+    return res.status(404).json({ data: null, error: 'NOT_FOUND', message: '訂單不存在' });
+  }
+
+  if (order.status === 'paid') {
+    return res.json({ data: { status: 'paid' }, error: null, message: '訂單已付款' });
+  }
+
+  try {
+    const merchantTradeNo = order.id.replace(/-/g, '').substring(0, 16).toUpperCase();
+    const tradeInfo = await queryTradeInfo(merchantTradeNo);
+
+    if (tradeInfo.RtnCode === '1') {
+      db.prepare(
+        `UPDATE orders SET status = 'paid', ecpay_trade_no = ?, payment_method = ?, paid_at = datetime('now') WHERE id = ?`
+      ).run(tradeInfo.TradeNo, tradeInfo.PaymentType, order.id);
+
+      return res.json({ data: { status: 'paid' }, error: null, message: '付款成功' });
+    }
+
+    return res.json({
+      data: { status: 'pending', rtnCode: tradeInfo.RtnCode, rtnMsg: tradeInfo.RtnMsg },
+      error: null,
+      message: '付款尚未完成'
+    });
+  } catch (e) {
+    return res.status(500).json({ data: null, error: 'ECPAY_QUERY_ERROR', message: '無法查詢付款狀態' });
+  }
 });
 
 module.exports = router;
