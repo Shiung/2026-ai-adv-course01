@@ -10,7 +10,7 @@
 | 訂單 | ✅ 完成 |
 | 後台商品管理 | ✅ 完成 |
 | 後台訂單管理 | ✅ 完成 |
-| 真實金流整合 | 🔲 未實作（ECPay 變數已備妥） |
+| ECPay 金流整合 | ✅ 完成 |
 
 ---
 
@@ -187,16 +187,46 @@
 
 ---
 
-### PATCH /api/orders/:id/pay — 模擬付款
+### GET /api/orders/:id/ecpay-form — 取得 ECPay AIO 表單參數
 
-**必填欄位**：`action`（`'success'` 或 `'fail'`）
+**需要**：JWT 認證，且訂單屬於當前登入用戶
 
 **業務邏輯**：
-- action 對應：`success → 'paid'`、`fail → 'failed'`
-- 訂單必須是 `pending` 狀態，否則 400 `INVALID_STATUS`
-- 只有訂單擁有者可以操作
+- 確認訂單存在且屬於當前用戶，否則 404
+- 呼叫 `buildAIOParams(order, items, baseUrl)` 產生含 CheckMacValue 的 AIO 表單參數
+- 回傳前端所需的 `params` 與 `actionUrl`，由前端動態建立 form 並 auto-submit 至 ECPay
 
-此為模擬接口；真實金流（ECPay）尚未整合。
+**成功回應（200）**：
+```json
+{ "data": { "params": { ... }, "actionUrl": "https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5" }, "error": null, "message": "ok" }
+```
+
+---
+
+### POST /api/orders/:id/verify-payment — 驗證 ECPay 付款結果
+
+**需要**：JWT 認證，且訂單屬於當前登入用戶
+
+**業務邏輯**：
+- 已是 `paid` 狀態 → 冪等，直接回傳 200（不重複更新）
+- 呼叫 ECPay `QueryTradeInfo` API 並驗證回應 CheckMacValue
+- `RtnCode=1`（付款成功）→ 更新訂單 `status='paid'`、`ecpay_trade_no`、`payment_method`、`paid_at`
+- 其他 RtnCode → 回傳 400 `PAYMENT_FAILED`
+
+**成功回應（200）**：
+```json
+{ "data": { "status": "paid", "ecpay_trade_no": "...", "paid_at": "..." }, "error": null, "message": "付款驗證成功" }
+```
+
+---
+
+### POST /api/ecpay/return — ECPay Server Notify 接收端
+
+路由前綴：`/api/ecpay`｜無需認證（ECPay 伺服器呼叫）
+
+接收 ECPay 非同步通知（ReturnURL）。目前在本地開發環境（localhost）因無法被 ECPay 伺服器存取，付款確認改由前端主動呼叫 `verify-payment` 處理。正式上線後此端點可作為備援確認機制。
+
+回應格式：`1|OK`（純文字，符合 ECPay 規格）
 
 ---
 

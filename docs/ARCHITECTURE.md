@@ -15,11 +15,14 @@
 │   │   ├── adminMiddleware.js   # 確認 req.user.role === 'admin'
 │   │   ├── sessionMiddleware.js # 從 X-Session-Id header 取出 sessionId 存入 req.sessionId
 │   │   └── errorHandler.js     # 全域錯誤處理，防止內部錯誤訊息洩漏
+│   ├── utils/
+│   │   └── ecpay.js            # ECPay 工具模組（CheckMacValue 產生/驗證、buildAIOParams、queryTradeInfo）
 │   └── routes/
 │       ├── authRoutes.js        # POST /register, POST /login, GET /profile
 │       ├── productRoutes.js     # GET /products, GET /products/:id（公開）
 │       ├── cartRoutes.js        # 購物車 CRUD（雙模式認證：JWT 或 X-Session-Id）
-│       ├── orderRoutes.js       # 訂單 CRUD + 模擬付款（需登入）
+│       ├── orderRoutes.js       # 訂單 CRUD + ECPay 金流端點（需登入）
+│       ├── ecpayRoutes.js       # POST /api/ecpay/return（ECPay Server Notify，無需認證）
 │       ├── adminProductRoutes.js # 後台商品 CRUD（需 admin role）
 │       ├── adminOrderRoutes.js   # 後台訂單查詢（需 admin role）
 │       └── pageRoutes.js        # 所有 EJS 頁面路由（前台 + 後台）
@@ -92,7 +95,9 @@
 | POST | /api/orders | orderRoutes.js | JWT | 從購物車建立訂單 |
 | GET | /api/orders | orderRoutes.js | JWT | 我的訂單列表 |
 | GET | /api/orders/:id | orderRoutes.js | JWT | 訂單詳情 |
-| PATCH | /api/orders/:id/pay | orderRoutes.js | JWT | 模擬付款 |
+| GET | /api/orders/:id/ecpay-form | orderRoutes.js | JWT | 取得 ECPay AIO 表單參數 |
+| POST | /api/orders/:id/verify-payment | orderRoutes.js | JWT | 呼叫 QueryTradeInfo 驗證付款 |
+| POST | /api/ecpay/return | ecpayRoutes.js | 無 | ECPay Server Notify 接收端 |
 | GET | /api/admin/products | adminProductRoutes.js | JWT + admin | 後台商品列表 |
 | POST | /api/admin/products | adminProductRoutes.js | JWT + admin | 新增商品 |
 | PUT | /api/admin/products/:id | adminProductRoutes.js | JWT + admin | 編輯商品 |
@@ -212,7 +217,12 @@ WAL 模式（`PRAGMA journal_mode = WAL`）啟用以提升並發讀取效能。
 | recipient_address | TEXT | NOT NULL | |
 | total_amount | INTEGER | NOT NULL | 建立時計算，快照價格 |
 | status | TEXT | NOT NULL DEFAULT 'pending' CHECK IN ('pending', 'paid', 'failed') | |
+| ecpay_trade_no | TEXT | | ECPay 交易編號（付款成功後填入） |
+| payment_method | TEXT | | 付款方式（例如 Credit）|
+| paid_at | TEXT | | 付款時間（ISO 8601，付款成功後填入） |
 | created_at | TEXT | NOT NULL DEFAULT datetime('now') | |
+
+> `ecpay_trade_no`、`payment_method`、`paid_at` 三欄透過 `addColumnIfNotExists` migration helper 加入，具冪等性（已存在則跳過）。
 
 ### order_items
 

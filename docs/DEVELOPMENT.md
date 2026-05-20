@@ -59,12 +59,12 @@ const db = require('../database');
 | `BASE_URL` | 伺服器本身的 URL | 選填 | `http://localhost:3001` |
 | `ADMIN_EMAIL` | Seed admin 帳號的 email | 選填 | `admin@hexschool.com` |
 | `ADMIN_PASSWORD` | Seed admin 帳號的密碼 | 選填 | `12345678` |
-| `ECPAY_MERCHANT_ID` | 綠界商店代號（未來擴充用） | 選填 | — |
-| `ECPAY_HASH_KEY` | 綠界 Hash Key | 選填 | — |
-| `ECPAY_HASH_IV` | 綠界 Hash IV | 選填 | — |
-| `ECPAY_ENV` | 綠界環境（staging/production） | 選填 | — |
+| `ECPAY_MERCHANT_ID` | 綠界商店代號 | **必要**（使用 ECPay 金流時） | — |
+| `ECPAY_HASH_KEY` | 綠界 Hash Key | **必要**（使用 ECPay 金流時） | — |
+| `ECPAY_HASH_IV` | 綠界 Hash IV | **必要**（使用 ECPay 金流時） | — |
+| `ECPAY_ENV` | 綠界環境（`staging` / `production`） | 選填 | `staging` |
 
-> 目前付款為模擬模式（`PATCH /api/orders/:id/pay`），ECPay 變數尚未整合至路由邏輯。
+> ECPay 相關變數缺少時，呼叫 `GET /api/orders/:id/ecpay-form` 或 `POST /api/orders/:id/verify-payment` 會因 `buildAIOParams` / `queryTradeInfo` 無法取得憑證而失敗。本地開發請以 ECPay 測試帳號（staging）填入 `.env`。
 
 ## 計畫歸檔流程
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- 串接 ECPay AIO 金流，支援信用卡付款（`src/utils/ecpay.js`、`src/routes/ecpayRoutes.js`）
+- 新增 `GET /api/orders/:id/ecpay-form` — 產生 ECPay AIO 表單參數（`src/routes/orderRoutes.js`）
+- 新增 `POST /api/orders/:id/verify-payment` — 呼叫 ECPay QueryTradeInfo 確認付款結果（`src/routes/orderRoutes.js`）
+- 新增 `POST /api/ecpay/return` — 接收 ECPay Server Notify（`src/routes/ecpayRoutes.js`）
+- `orders` 表新增 `ecpay_trade_no`、`payment_method`、`paid_at` 欄位（`src/database.js`）
+
+### Changed
+- 訂單詳情頁付款流程改為真實 ECPay AIO 串接，移除 mock 付款按鈕（`views/pages/order-detail.ejs`、`public/js/pages/order-detail.js`）
+
 ## [初始版本] — 2026-05-20
 
 ### 新增
